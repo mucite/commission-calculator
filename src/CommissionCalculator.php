@@ -18,69 +18,35 @@ class CommissionCalculator
     /**
      * Process transactions from input file and write commissions to output file.
      *
-     * @param string $inputFile  Path to input file containing JSON transactions
+     * @param string $inputFile Path to input file containing JSON transactions
      * @param string $outputFile Path to output file to write commissions
      * @throws Exception If there is an error opening files or processing transactions
      */
     public function processTransactions(string $inputFile, string $outputFile)
     {
-        if (!file_exists($inputFile)) {
-            throw new Exception("Input file not found: $inputFile");
-        }
+        $transactions = file($inputFile, FILE_IGNORE_NEW_LINES);
+        $output = fopen($outputFile, 'w');
 
-        if (!file_exists($outputFile)) {
-            if (!touch($outputFile)) {
-                throw new Exception("Output file could not be created: $outputFile");
-            }
-        }
+        foreach ($transactions as $transaction) {
+            $value = json_decode($transaction, true);
 
-        $inputHandle = fopen($inputFile, 'r');
-        $outputHandle = fopen($outputFile, 'w');
+            $countryCode = $this->binProvider->getCountryCodeFromBIN($value['bin']);
+            $commissionRate = in_array($countryCode, self::EU_COUNTRIES) ? self::EU_COMMISSION_RATE :
+                self::NON_EU_COMMISSION_RATE;
 
-        if (!$inputHandle || !$outputHandle) {
-            throw new Exception("Failed to open input or output file");
-        }
-
-        while (($line = fgets($inputHandle)) !== false) {
-            $transaction = json_decode($line, true);
-            if (!isset($transaction['amount'], $transaction['currency'], $transaction['bin'])) {
-                throw new Exception("Invalid transaction data: $line");
+            if ($value['currency'] != 'EUR') {
+                $amountInEUR = $this->currencyConverter->convertToEUR($value['amount'], $value['currency']);
+            } else {
+                $amountInEUR = $value['amount'];
             }
 
-            $bin = $transaction['bin'];
-            $amount = (float) $transaction['amount'];
-            $currency = $transaction['currency'];
+            $commission = $amountInEUR * $commissionRate;
+            $roundedCommission = ceil($commission * 100) / 100;
 
-            $countryCode = $this->binProvider->getCountryCodeFromBIN($bin);
-            if (!$countryCode) {
-                throw new Exception("Invalid BIN: $bin");
-            }
-
-            $amountInEUR = $currency === 'EUR' ? $amount : $this->currencyConverter->convertToEUR($amount, $currency);
-            if ($amountInEUR === null) {
-                throw new Exception("Currency conversion failed: $amount $currency");
-            }
-
-            $commission = $this->calculateCommission($amountInEUR, $countryCode);
-            $commission = ceil($commission * 100) / 100;
-            fputcsv($outputHandle, [$commission]);
+            fputcsv($output, [$roundedCommission]);
         }
 
-        fclose($inputHandle);
-        fclose($outputHandle);
-    }
-
-    /**
-     * Calculate commission based on amount and country code.
-     *
-     * @param float $amount     Amount in EUR
-     * @param string $countryCode Country code derived from BIN
-     * @return float Commission amount
-     */
-    private function calculateCommission(float $amount, string $countryCode)
-    {
-        $rate = in_array($countryCode, self::EU_COUNTRIES) ? self::EU_COMMISSION_RATE : self::NON_EU_COMMISSION_RATE;
-        return ceil($amount * $rate * 100) / 100;
+        fclose($output);
     }
 
     const EU_COUNTRIES = [
